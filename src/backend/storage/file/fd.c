@@ -2944,7 +2944,7 @@ int
 HdfsFileSync(File file)
 {
 	Assert(FileIsValid(file));
-	if (!FileIsNotOpen(file))
+	if (!FileIsNotOpen(file) && enableFsync)
 	{
 		DO_DB(elog(LOG, "HdfsFileSync: %d (%s)", file, VfdCache[file].fileName));
 

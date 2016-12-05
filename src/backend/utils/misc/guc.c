@@ -1241,7 +1241,7 @@ static struct config_bool ConfigureNamesBool[] =
 		  GUC_NOT_IN_SAMPLE | GUC_NO_SHOW_ALL | GUC_DISALLOW_USER_SET
 		},
 		&enableFsync,
-		true, NULL, NULL
+		false, NULL, NULL
 	},
 	{
 		{"zero_damaged_pages", PGC_SUSET, DEVELOPER_OPTIONS,

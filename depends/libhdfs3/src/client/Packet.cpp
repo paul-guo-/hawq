@@ -86,6 +86,12 @@ void Packet::addData(const char * buf, int size) {
 }
 
 void Packet::setSyncFlag(bool sync) {
+#if 0
+if (sync) {
+       THROW(HdfsIOException, Hdfs::Internal::PrintStack(1, STACK_DEPTH).c_str());
+}
+#endif
+	sync = false;
     syncBlock = sync;
 }
 
