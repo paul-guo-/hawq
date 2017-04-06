@@ -171,3 +171,4 @@ test: caqlinmem
 test: hcatalog_lookup
 test: json_load
 test: validator_function
+test: guc_env_var

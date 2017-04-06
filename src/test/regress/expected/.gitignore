@@ -40,3 +40,4 @@ caqlinmem.out
 hcatalog_lookup.out
 json_load.out
 external_oid.out
+guc_env_var.out

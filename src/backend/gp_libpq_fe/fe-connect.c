@@ -245,6 +245,12 @@ static const PQconninfoOption PQconninfoOptions[] = {
 
 static const PQEnvironmentOption EnvironmentOptions[] =
 {
+	/*
+	 * For QD-QE connections, we should ignore these environment variables,
+	 * since env variable of QD should not effect the GUCs of QE, otherwise, the SET
+	 * command would not work in the newly created Gang then
+	 */
+#if 0
 	/* common user-interface settings */
 	{
 		"PGDATESTYLE", "datestyle"
@@ -259,6 +265,7 @@ static const PQEnvironmentOption EnvironmentOptions[] =
 	{
 		"PGGEQO", "geqo"
 	},
+#endif
 	{
 		NULL, NULL
 	}

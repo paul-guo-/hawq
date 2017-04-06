@@ -41,3 +41,4 @@ hcatalog_lookup.sql
 json_load.sql
 external_oid.sql
 orca_udfs.sql
+guc_env_var.sql
