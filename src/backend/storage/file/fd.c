@@ -157,6 +157,7 @@ static int	max_safe_fds = 32;	/* default if not changed */
 #define FD_TEMPORARY		(1 << 0)	/* T = delete when closed */
 #define FD_CLOSE_AT_EOXACT	(1 << 1)	/* T = close at eoXact */
 #define FD_CLOSE_AT_EOQUERY	(1 << 2)	/* T = close at eoXact */
+#define FD_REUSABLE			(1 << 3)	/* reusable */
 
 typedef struct vfd
 {
@@ -2636,6 +2637,42 @@ HdfsBasicOpenFile(FileName fileName, int fileFlags, int fileMode,
 	return FALSE; /* failure */
 }
 
+//paul
+// >0: a file for reuse, else wrong.
+static int
+ReuseHdfsFile(char *pathname, int fileFlags, int fileMode)
+{
+	int file;
+
+	//paul
+	//elog(WARNING, "%s () enter. total: %d", __func__, (int) SizeVfdCache);
+	for (file = 1; file < SizeVfdCache; file++) {
+		Vfd *vfdP = &VfdCache[file];
+
+		if (vfdP->fdstate & FD_REUSABLE &&
+			strcmp(vfdP->fileName, pathname) == 0 &&
+			vfdP->fileFlags == fileFlags &&
+			vfdP->fileMode == fileMode) {
+
+			vfdP->fdstate &= ~FD_REUSABLE;
+
+#if 0
+			// it seems to be a low-latency call.
+			if (vfdP->seekPos != 0) {
+				vfdP->seekPos = 0;
+				HdfsFileSeek(file, 0, SEEK_SET);
+			}
+#endif
+
+			//elog(WARNING, "%s () exit, file %d", __func__, file);
+			return file;
+		}
+	}
+	//elog(WARNING, "%s () exit, file %d", __func__, -1);
+
+	return -1;
+}
+
 /*
  * open a hdfs file.
  *
@@ -2662,6 +2699,15 @@ HdfsPathNameOpenFile(FileName fileName, int fileFlags, int fileMode)
 				(errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
 
 	DO_DB(elog(LOG, "HdfsPathNameOpenFile: %s", fileName));
+
+	// paul: reuse
+#if 1
+	file = ReuseHdfsFile(pathname, fileFlags, fileMode);
+	if (file > 0) {
+		//elog(WARNING, "reuse %d", file);
+		return file;
+	}
+#endif
 
 	while (nfile + numAllocatedDescs + 1 >= max_safe_fds)
 	{
@@ -2708,7 +2754,8 @@ HdfsPathNameOpenFile(FileName fileName, int fileFlags, int fileMode)
 	++nfile;
 	Insert(file);
 
-	DO_DB(elog(LOG, "HdfsPathNameOpenFile: file: %d, success %s", file, fileName));
+	//DO_DB(elog(LOG, "HdfsPathNameOpenFile: file: %d, success %s", file, fileName));
+	//elog(WARNING, "HdfsPathNameOpenFile, file: %d, flags: %o, success %s", file, fileFlags, fileName);
 
 	return file;
 }
@@ -2729,8 +2776,22 @@ HdfsFileClose(File file, bool canReportError)
 
 	DO_DB(elog(LOG, "HdfsFileClose: %d (%s)", file, vfdP->fileName));
 
+	/*
+	 * Test LruDelete() calls HdfsCloseFile(), so we basically assume
+	 * callers of this function allows fd reuse here. Not right,
+	 * just for test.
+	 */
+
 	if (!FileIsNotOpen(file)) //file is open
 	{
+		/* paul */
+#if 1
+		if (! (vfdP->fileFlags & (O_APPEND | O_CREAT | O_TRUNC | O_WRONLY | O_RDWR))) {
+			vfdP->fdstate |= FD_REUSABLE;
+			return;
+		}
+#endif
+
 		Delete(file);
 
 		//no matter the return code, remove vfd, file cannot be closed twice
@@ -2809,7 +2870,8 @@ HdfsFileWrite(File file, const char *buffer, int amount)
 	vfdP = &VfdCache[file];
 
 	Assert(FileIsValid(file));
-
+//paul
+//elog(WARNING, "%s() calls file %d", __func__, file);
 	DO_DB(elog(LOG, "HdfsFileWrite: %d (%s) " INT64_FORMAT " %d %p",
 					file,vfdP->fileName,
 					vfdP->seekPos, amount, buffer));

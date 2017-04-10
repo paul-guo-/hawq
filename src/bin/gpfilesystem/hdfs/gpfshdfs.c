@@ -85,6 +85,99 @@ Datum gpfs_hdfs_truncate(PG_FUNCTION_ARGS);
 Datum gpfs_hdfs_getpathinfo(PG_FUNCTION_ARGS);
 Datum gpfs_hdfs_freefileinfo(PG_FUNCTION_ARGS);
 
+#ifdef HDFS_FD_HASH
+struct hdfs_fd_key {
+	hdfsFS hdfs;
+	hdfsFile hFile;
+	char *path;
+	int flag;
+}
+
+#define MAX_HDFS_FD 128
+static struct hdfs_fd_key *fd_list[MAX_HDFS_FD];
+static unsigned int hdfs_fd_next = 0;
+static unsigned int hdfs_fd_len = 0;
+
+/* Just compare via path & flag */
+bool
+match_fd(struct hdfs_fd_key *key1, struct hdfs_fd_key *key2)
+{
+	if (strcmp(key1->path, key2->path) == 0 &&
+		key1->flag = key2->flag)
+			return true;
+
+	return false;
+}
+
+/* < 0: not found. other: index */
+int
+find_fd(struct hdfs_fd_key *key)
+{
+	int i;
+
+	for (i = 0; i < hdfs_fd_len; i++) {
+		if (match_fd(key, fd_list[i]))
+			return i;
+	}
+
+	return -1;
+}
+
+/* Append the key via {path&flag} */
+int
+insert_fd_if_needed(char *path, int flag)
+{
+	int idx;
+	struct hdfs_fd_key *old_key;
+
+	idx = find_fd(path, flag);
+
+	if (idx >= 0) {
+		free(path);
+		return;
+	}
+
+	key = malloc(sizeof(hdfs_fd_key));
+	key->path = path;
+	key->flag = flag;
+	hFile = hdfsOpenFile(hdfs, path, flags, bufferSize, rep, blocksize);
+
+	/* Not found. */
+	if (hdfs_fd_len < MAX_HDFS_FD) {
+		/* append */
+		fd_list[hdfs_fd_next] = key;
+		hdfs_fd_next++;
+		hdfs_fd_len++;
+	} else {
+		/* replace */
+		hdfs_fd_next = hdfs_fd_next % MAX_HDFS_FD;
+
+		old_key = fd_list[hdfs_fd_next];
+		hdfsCloseFile(old_key->hdfs, old_key->hFile);
+		free(old_key->path);
+		free(old_key);
+
+		fd_list[hdfs_fd_next] = key;
+		hdfs_fd_next++;
+	}
+}
+
+/* code logic:
+ * open():
+ *       if {hdfs, path, flag} in list
+ *          Move the key to the list end;
+ *          seek(0) if needed, and return the key;
+ *       else
+ *          Open it and append it into list;
+ * seek():
+ *       do nothing.
+ * close():
+ *       do nothing and append it into list.
+ * open():
+ */
+
+#endif
+
 /*
  * hdfsFS hdfsConnect(const char * host, uint16_t port);
  */
@@ -224,6 +317,8 @@ gpfs_hdfs_openfile(PG_FUNCTION_ARGS)
 	rep = FSYS_UDF_GET_FILEREP(fcinfo);
 	blocksize = FSYS_UDF_GET_FILEBLKSIZE(fcinfo);
 
+//paul
+//elog(WARNING, "hdfs open: path: %s, flags: %o, bufferSize: %d, rep: %d, blocksize: %d", path, flags, bufferSize, rep, blocksize);
 	if (NULL == hdfs) {
 		elog(WARNING, "get hdfs invalid in gpfs_hdfs_openfile");
 		retval = -1;
@@ -244,15 +339,23 @@ gpfs_hdfs_openfile(PG_FUNCTION_ARGS)
 		PG_RETURN_INT32(retval);
 	}
 
+//paul
+//elog(WARNING, "%s() calls. path: %s, flags: %o\n", __func__, path, flags);
 	do {
 		if (sleepTime > 0) {
 			pg_usleep(sleepTime);
 		}
 
+struct timeval start, end;
+//paul
+gettimeofday(&start, NULL);
 		hFile = hdfsOpenFile(hdfs, path, flags, bufferSize, rep, blocksize);
+gettimeofday(&end, NULL);
+//elog(WARNING, "  hdfs open time: %d s + %d us\n", (int)(end.tv_sec-start.tv_sec), (int)(end.tv_usec-start.tv_usec));
 		sleepTime = sleepTime * 2 + 10000;
 		sleepTime = sleepTime < maxSleep ? sleepTime : maxSleep;
 	} while (--numRetry > 0 && hFile == NULL && errno == EBUSY);
+//elog(WARNING, "  hdfs open close, hFile: %p\n", hFile);
 
 	if (NULL == hFile) {
 		retval = -1;
@@ -332,6 +435,8 @@ gpfs_hdfs_closefile(PG_FUNCTION_ARGS)
 		errno = EINVAL;
 		PG_RETURN_INT32(retval);
 	}
+
+//elog(WARNING, "%s() calls. hFile: %p", __func__, hFile);
 
 	retval = hdfsCloseFile(hdfs, hFile);
 
@@ -504,8 +609,14 @@ gpfs_hdfs_read(PG_FUNCTION_ARGS)
 		errno = EINVAL;
 		PG_RETURN_INT32(retval);
 	}
+//paul
+struct timeval start, end;
+gettimeofday(&start, NULL);
 
 	retval = hdfsRead(hdfs, hFile, buf, length);
+
+gettimeofday(&end, NULL);
+elog(WARNING, "  hdfs read time: %d s + %d us\n", (int)(end.tv_sec-start.tv_sec), (int)(end.tv_usec-start.tv_usec));
 
 	PG_RETURN_INT32(retval);
 }
@@ -529,7 +640,7 @@ gpfs_hdfs_write(PG_FUNCTION_ARGS)
 		errno = EINVAL;
 		PG_RETURN_INT32(retval);
 	}
-
+//elog(WARNING, "%s() calls", __func__);
 	hdfs = FSYS_UDF_GET_HDFS(fcinfo);
 	hFile = FSYS_UDF_GET_HFILE(fcinfo);
 	buf = FSYS_UDF_GET_DATABUF(fcinfo);
@@ -605,8 +716,14 @@ gpfs_hdfs_seek(PG_FUNCTION_ARGS)
 		PG_RETURN_INT64(retval);
 	}
 
+//elog(WARNING, "%s() calls", __func__);
+struct timeval start, end;
+gettimeofday(&start, NULL);
+
 	retval = hdfsSeek(hdfs, hFile, pos);
 
+gettimeofday(&end, NULL);
+//elog(WARNING, "  hdfs seek time: %d s + %d us\n", (int)(end.tv_sec-start.tv_sec), (int)(end.tv_usec-start.tv_usec));
 	PG_RETURN_INT64(retval);
 }
 
